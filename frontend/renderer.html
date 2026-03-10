@@ -1,0 +1,579 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Spatial Audio Renderer</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f4efe2;
+        --panel: #fffaf0;
+        --ink: #15233b;
+        --line: #c8b58a;
+        --pitch: #dce8c8;
+        --pitch-line: #537048;
+        --accent: #ba4a00;
+        --home: #126782;
+        --away: #8f250c;
+        --ball: #111111;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family: Georgia, "Times New Roman", serif;
+        background:
+          radial-gradient(circle at top, rgba(255, 255, 255, 0.85), transparent 45%),
+          linear-gradient(180deg, #faf5ea 0%, #efe4cb 100%);
+        color: var(--ink);
+      }
+
+      .shell {
+        display: grid;
+        gap: 12px;
+        padding: 12px;
+      }
+
+      .hero {
+        display: grid;
+        grid-template-columns: 1.4fr 1fr;
+        gap: 12px;
+      }
+
+      .panel {
+        background: rgba(255, 250, 240, 0.92);
+        border: 1px solid rgba(200, 181, 138, 0.8);
+        border-radius: 16px;
+        padding: 14px;
+        box-shadow: 0 14px 30px rgba(39, 49, 69, 0.08);
+      }
+
+      .meta {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin-top: 10px;
+      }
+
+      .pill {
+        padding: 6px 10px;
+        border-radius: 999px;
+        background: rgba(21, 35, 59, 0.08);
+        font-size: 12px;
+      }
+
+      .transport {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+
+      button {
+        border: 0;
+        border-radius: 999px;
+        padding: 10px 14px;
+        background: var(--accent);
+        color: white;
+        font-weight: 700;
+        cursor: pointer;
+      }
+
+      button.secondary {
+        background: rgba(21, 35, 59, 0.12);
+        color: var(--ink);
+      }
+
+      .transport input[type="range"] {
+        flex: 1;
+        min-width: 180px;
+      }
+
+      canvas {
+        width: 100%;
+        display: block;
+        border-radius: 14px;
+        background: linear-gradient(180deg, #dce8c8 0%, #c9dcb0 100%);
+      }
+
+      .legend {
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+        font-size: 13px;
+        margin-top: 8px;
+      }
+
+      .legend span {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .swatch {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+      }
+
+      .status-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+      }
+
+      .status-card {
+        padding: 10px;
+        border-radius: 12px;
+        background: rgba(255, 255, 255, 0.65);
+      }
+
+      .events {
+        max-height: 220px;
+        overflow: auto;
+        display: grid;
+        gap: 8px;
+      }
+
+      .event {
+        padding: 10px;
+        border-radius: 12px;
+        background: rgba(21, 35, 59, 0.06);
+        border-left: 4px solid transparent;
+      }
+
+      .event.active {
+        border-left-color: var(--accent);
+        background: rgba(186, 74, 0, 0.12);
+      }
+
+      .sr {
+        position: absolute;
+        left: -9999px;
+      }
+
+      @media (max-width: 900px) {
+        .hero {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <div class="hero">
+        <section class="panel">
+          <h2 id="title">Match renderer</h2>
+          <div class="meta" id="meta"></div>
+          <div class="transport" style="margin-top: 12px">
+            <button id="audio-button">Start audio</button>
+            <button id="pause-button" class="secondary">Pause</button>
+            <label for="seek" class="sr">Replay position</label>
+            <input id="seek" type="range" min="0" max="1000" step="1" value="0" />
+            <span id="time-label">0.0s</span>
+          </div>
+          <div style="margin-top: 14px">
+            <canvas id="pitch" width="960" height="520"></canvas>
+          </div>
+          <div class="legend">
+            <span><i class="swatch" style="background: var(--ball)"></i>Ball</span>
+            <span><i class="swatch" style="background: var(--home)"></i>Nearest attacker</span>
+            <span><i class="swatch" style="background: var(--away)"></i>Nearest defender</span>
+            <span><i class="swatch" style="background: var(--accent)"></i>Active event</span>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2>Audio and event status</h2>
+          <div class="status-grid" id="status-grid"></div>
+          <h3 style="margin-top: 18px">Important events</h3>
+          <div class="events" id="events"></div>
+        </section>
+      </div>
+    </div>
+
+    <script>
+      const payload = __REPLAY_PAYLOAD__;
+
+      const pitchCanvas = document.getElementById("pitch");
+      const ctx = pitchCanvas.getContext("2d");
+      const meta = document.getElementById("meta");
+      const statusGrid = document.getElementById("status-grid");
+      const eventsEl = document.getElementById("events");
+      const seekEl = document.getElementById("seek");
+      const timeLabel = document.getElementById("time-label");
+      const audioButton = document.getElementById("audio-button");
+      const pauseButton = document.getElementById("pause-button");
+
+      document.getElementById("title").textContent = payload.source_name;
+
+      const state = {
+        audioContext: null,
+        masterGain: null,
+        duckGain: null,
+        ballOsc: null,
+        ballGain: null,
+        ballPanner: null,
+        attackerOsc: null,
+        attackerGain: null,
+        attackerPanner: null,
+        defenderOsc: null,
+        defenderGain: null,
+        defenderPanner: null,
+        currentFrameIndex: 0,
+        lastAnimationTime: 0,
+        playing: Boolean(payload.controls.playing),
+        audioStarted: false,
+        speechEnabled: Boolean(payload.settings.narration_enabled),
+        spokenEvents: new Set(),
+        eventMap: new Map(payload.events.map((event) => [event.event_id, event])),
+        currentPossession: null,
+        playingFromUser: false,
+      };
+
+      const frameDurationMs = 1000 / (payload.fps || 25);
+      const maxFrameIndex = Math.max(payload.frames.length - 1, 0);
+
+      function setMeta() {
+        const items = [
+          `${payload.frames.length} frames`,
+          `${payload.events.length} events`,
+          `${payload.camera.name} camera`,
+          `${payload.duration_s.toFixed(1)}s duration`,
+          `${payload.controls.speed}x speed`,
+        ];
+        meta.innerHTML = items.map((item) => `<span class="pill">${item}</span>`).join("");
+      }
+
+      function setStatusCards(frame, activeEvents) {
+        const cards = [
+          ["Clock", `${frame.timestamp_s.toFixed(1)}s`],
+          ["Ball speed", `${frame.ball.speed_mps.toFixed(1)} m/s`],
+          ["Possession", frame.possessing_team || "Unknown"],
+          ["Active events", activeEvents.length ? activeEvents.map((event) => event.event_type).join(", ") : "None"],
+        ];
+        statusGrid.innerHTML = cards
+          .map(
+            ([label, value]) =>
+              `<div class="status-card"><div style="font-size:12px;opacity:0.72">${label}</div><div style="font-size:18px;font-weight:700">${value}</div></div>`
+          )
+          .join("");
+      }
+
+      function renderEventList(activeEventIds) {
+        eventsEl.innerHTML = payload.events
+          .filter((event) => event.important)
+          .map((event) => {
+            const active = activeEventIds.includes(event.event_id) ? "active" : "";
+            const narration = payload.narrations[event.event_id];
+            return `
+              <div class="event ${active}">
+                <div style="font-weight:700">${event.label}</div>
+                <div style="font-size:12px;opacity:0.74">${event.timestamp_s.toFixed(1)}s</div>
+                ${narration ? `<div style="margin-top:4px">${narration}</div>` : ""}
+              </div>
+            `;
+          })
+          .join("");
+      }
+
+      function pitchToCanvas(x, z) {
+        const px = ((x + 52.5) / 105) * pitchCanvas.width;
+        const pz = ((z + 34) / 68) * pitchCanvas.height;
+        return [px, pz];
+      }
+
+      function drawPitch(frame) {
+        ctx.clearRect(0, 0, pitchCanvas.width, pitchCanvas.height);
+        ctx.fillStyle = "#dce8c8";
+        ctx.fillRect(0, 0, pitchCanvas.width, pitchCanvas.height);
+        ctx.strokeStyle = "#537048";
+        ctx.lineWidth = 4;
+        ctx.strokeRect(6, 6, pitchCanvas.width - 12, pitchCanvas.height - 12);
+        ctx.beginPath();
+        ctx.moveTo(pitchCanvas.width / 2, 6);
+        ctx.lineTo(pitchCanvas.width / 2, pitchCanvas.height - 6);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(pitchCanvas.width / 2, pitchCanvas.height / 2, 60, 0, Math.PI * 2);
+        ctx.stroke();
+
+        const shouldDrawAll = Boolean(payload.controls.show_all_players);
+        if (shouldDrawAll) {
+          for (const player of frame.players) {
+            const [x, z] = pitchToCanvas(player.x, player.z);
+            ctx.fillStyle = player.team === "Home" ? "#126782" : "#8f250c";
+            ctx.beginPath();
+            ctx.arc(x, z, 8, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
+
+        for (const [entity, color, radius] of [
+          [frame.nearest_attacker, "#126782", 10],
+          [frame.nearest_defender, "#8f250c", 10],
+        ]) {
+          if (!entity) continue;
+          const [x, z] = pitchToCanvas(entity.x, entity.z);
+          ctx.fillStyle = color;
+          ctx.beginPath();
+          ctx.arc(x, z, radius, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        const [ballX, ballZ] = pitchToCanvas(frame.ball.x, frame.ball.z);
+        ctx.fillStyle = "#111111";
+        ctx.beginPath();
+        ctx.arc(ballX, ballZ, 7, 0, Math.PI * 2);
+        ctx.fill();
+
+        const camera = payload.camera.preset.position;
+        const [camX, camZ] = pitchToCanvas(camera.x, Math.max(-34, Math.min(34, camera.z - 34)));
+        ctx.fillStyle = "#ba4a00";
+        ctx.beginPath();
+        ctx.moveTo(camX, camZ - 10);
+        ctx.lineTo(camX + 8, camZ + 8);
+        ctx.lineTo(camX - 8, camZ + 8);
+        ctx.closePath();
+        ctx.fill();
+      }
+
+      function createPanner(audioContext, initial = { x: 0, y: 0, z: 0 }) {
+        return new PannerNode(audioContext, {
+          panningModel: "HRTF",
+          distanceModel: "linear",
+          refDistance: 1,
+          maxDistance: 160,
+          rolloffFactor: 1.15,
+          positionX: initial.x,
+          positionY: initial.y,
+          positionZ: initial.z,
+        });
+      }
+
+      function initAudio() {
+        if (state.audioStarted) {
+          return;
+        }
+        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        const listener = audioContext.listener;
+        listener.positionX.value = payload.camera.preset.position.x;
+        listener.positionY.value = payload.camera.preset.position.y;
+        listener.positionZ.value = payload.camera.preset.position.z;
+        listener.forwardX.value = payload.camera.preset.forward.x;
+        listener.forwardY.value = payload.camera.preset.forward.y;
+        listener.forwardZ.value = payload.camera.preset.forward.z;
+        listener.upX.value = payload.camera.preset.up.x;
+        listener.upY.value = payload.camera.preset.up.y;
+        listener.upZ.value = payload.camera.preset.up.z;
+
+        const masterGain = new GainNode(audioContext, { gain: 0.72 });
+        const duckGain = new GainNode(audioContext, { gain: 1.0 });
+        duckGain.connect(masterGain).connect(audioContext.destination);
+
+        const ballOsc = new OscillatorNode(audioContext, { type: "sine", frequency: 260 });
+        const ballGain = new GainNode(audioContext, { gain: 0.11 });
+        const ballPanner = createPanner(audioContext);
+        ballOsc.connect(ballGain).connect(ballPanner).connect(duckGain);
+        ballOsc.start();
+
+        const attackerOsc = new OscillatorNode(audioContext, { type: "triangle", frequency: 185 });
+        const attackerGain = new GainNode(audioContext, { gain: 0.04 });
+        const attackerPanner = createPanner(audioContext);
+        attackerOsc.connect(attackerGain).connect(attackerPanner).connect(duckGain);
+        attackerOsc.start();
+
+        const defenderOsc = new OscillatorNode(audioContext, { type: "square", frequency: 145 });
+        const defenderGain = new GainNode(audioContext, { gain: 0.035 });
+        const defenderPanner = createPanner(audioContext);
+        defenderOsc.connect(defenderGain).connect(defenderPanner).connect(duckGain);
+        defenderOsc.start();
+
+        Object.assign(state, {
+          audioContext,
+          masterGain,
+          duckGain,
+          ballOsc,
+          ballGain,
+          ballPanner,
+          attackerOsc,
+          attackerGain,
+          attackerPanner,
+          defenderOsc,
+          defenderGain,
+          defenderPanner,
+          audioStarted: true,
+        });
+      }
+
+      function updateAudio(frame, activeEvents) {
+        if (!state.audioStarted) {
+          return;
+        }
+        const now = state.audioContext.currentTime;
+        state.ballPanner.positionX.setValueAtTime(frame.ball.x, now);
+        state.ballPanner.positionY.setValueAtTime(frame.ball.y || 0, now);
+        state.ballPanner.positionZ.setValueAtTime(frame.ball.z, now);
+        const speedPitch = 230 + Math.min(frame.ball.speed_mps * 16, 260);
+        state.ballOsc.frequency.setTargetAtTime(speedPitch, now, 0.04);
+        state.ballGain.gain.setTargetAtTime(0.08 + Math.min(frame.ball.speed_mps / 60, 0.08), now, 0.08);
+
+        if (frame.nearest_attacker) {
+          state.attackerPanner.positionX.setValueAtTime(frame.nearest_attacker.x, now);
+          state.attackerPanner.positionZ.setValueAtTime(frame.nearest_attacker.z, now);
+          state.attackerOsc.frequency.setTargetAtTime(175, now, 0.07);
+          state.attackerGain.gain.setTargetAtTime(0.04, now, 0.1);
+        } else {
+          state.attackerGain.gain.setTargetAtTime(0.0, now, 0.1);
+        }
+
+        if (frame.nearest_defender) {
+          state.defenderPanner.positionX.setValueAtTime(frame.nearest_defender.x, now);
+          state.defenderPanner.positionZ.setValueAtTime(frame.nearest_defender.z, now);
+          state.defenderOsc.frequency.setTargetAtTime(148, now, 0.07);
+          state.defenderGain.gain.setTargetAtTime(0.038, now, 0.1);
+        } else {
+          state.defenderGain.gain.setTargetAtTime(0.0, now, 0.1);
+        }
+
+        if (frame.possessing_team && state.currentPossession && frame.possessing_team !== state.currentPossession) {
+          fireEarcon("POSSESSION_CHANGE");
+        }
+        state.currentPossession = frame.possessing_team;
+
+        for (const event of activeEvents) {
+          fireEarcon(event.event_type);
+          maybeSpeak(event);
+        }
+      }
+
+      function fireEarcon(eventType) {
+        if (!state.audioStarted) {
+          return;
+        }
+        const now = state.audioContext.currentTime;
+        const osc = new OscillatorNode(state.audioContext, { type: eventType === "GOAL" ? "sawtooth" : "triangle" });
+        const gain = new GainNode(state.audioContext, { gain: 0.0001 });
+        let frequency = 520;
+        if (eventType === "SHOT") frequency = 460;
+        if (eventType === "FOUL") frequency = 220;
+        if (eventType === "CORNER") frequency = 360;
+        if (eventType === "POSSESSION_CHANGE" || eventType === "TURNOVER") frequency = 300;
+        if (eventType === "GOAL") frequency = 680;
+        osc.frequency.setValueAtTime(frequency, now);
+        osc.connect(gain).connect(state.duckGain);
+        gain.gain.exponentialRampToValueAtTime(0.12, now + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.35);
+        osc.start(now);
+        osc.stop(now + 0.38);
+      }
+
+      function maybeSpeak(event) {
+        if (!state.speechEnabled) {
+          return;
+        }
+        if (!("speechSynthesis" in window)) {
+          return;
+        }
+        if (state.spokenEvents.has(event.event_id)) {
+          return;
+        }
+        const text = payload.narrations[event.event_id];
+        if (!text) {
+          return;
+        }
+        state.spokenEvents.add(event.event_id);
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.rate = 1.03;
+        utterance.pitch = 1.0;
+        utterance.lang = "en-US";
+        utterance.onstart = () => {
+          if (state.duckGain) {
+            state.duckGain.gain.setTargetAtTime(0.4, state.audioContext.currentTime, 0.03);
+          }
+        };
+        utterance.onend = () => {
+          if (state.duckGain) {
+            state.duckGain.gain.setTargetAtTime(1.0, state.audioContext.currentTime, 0.08);
+          }
+        };
+        window.speechSynthesis.speak(utterance);
+      }
+
+      function activeEventsForFrame(frame) {
+        return frame.event_ids.map((eventId) => state.eventMap.get(eventId)).filter(Boolean);
+      }
+
+      function setFrame(index) {
+        state.currentFrameIndex = Math.max(0, Math.min(index, maxFrameIndex));
+        const frame = payload.frames[state.currentFrameIndex];
+        const activeEvents = activeEventsForFrame(frame);
+        const seekBase = maxFrameIndex || 1;
+        seekEl.value = String(Math.round((state.currentFrameIndex / seekBase) * 1000));
+        timeLabel.textContent = `${frame.timestamp_s.toFixed(1)}s`;
+        drawPitch(frame);
+        setStatusCards(frame, activeEvents);
+        renderEventList(frame.event_ids);
+        updateAudio(frame, activeEvents);
+      }
+
+      function frameIndexForTime(seconds) {
+        let bestIndex = 0;
+        for (let index = 0; index < payload.frames.length; index += 1) {
+          if (payload.frames[index].timestamp_s >= seconds) {
+            return index;
+          }
+          bestIndex = index;
+        }
+        return bestIndex;
+      }
+
+      function animate(timestamp) {
+        if (!state.lastAnimationTime) {
+          state.lastAnimationTime = timestamp;
+        }
+        const elapsed = timestamp - state.lastAnimationTime;
+        if (state.playing && elapsed >= frameDurationMs / payload.controls.speed) {
+          state.lastAnimationTime = timestamp;
+          if (state.currentFrameIndex < maxFrameIndex) {
+            setFrame(state.currentFrameIndex + 1);
+          } else {
+            state.playing = false;
+          }
+        }
+        window.requestAnimationFrame(animate);
+      }
+
+      audioButton.addEventListener("click", async () => {
+        initAudio();
+        if (state.audioContext.state !== "running") {
+          await state.audioContext.resume();
+        }
+        state.playing = true;
+        state.playingFromUser = true;
+      });
+
+      pauseButton.addEventListener("click", () => {
+        state.playing = false;
+        window.speechSynthesis?.cancel();
+      });
+
+      seekEl.addEventListener("input", () => {
+        const ratio = Number(seekEl.value) / 1000;
+        const index = Math.round(maxFrameIndex * ratio);
+        setFrame(index);
+      });
+
+      setMeta();
+      setFrame(frameIndexForTime(payload.controls.start_time_s || 0));
+      if (!payload.controls.playing) {
+        state.playing = false;
+      }
+      window.requestAnimationFrame(animate);
+    </script>
+  </body>
+</html>

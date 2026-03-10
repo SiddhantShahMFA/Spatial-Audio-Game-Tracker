@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "spatial-audio-game-tracker"
+version = "0.1.0"
+description = "Streamlit MVP for spatial soccer sonification with Metrica-style replay data."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "openai>=1.70.0",
+  "streamlit>=1.44.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.setuptools.packages.find]
+include = ["spatial_audio_tracker*"]
